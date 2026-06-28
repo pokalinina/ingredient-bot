@@ -1,5 +1,5 @@
 import os
-import google.generativeai as genai
+import anthropic
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -8,38 +8,37 @@ from telegram.ext import (
 
 # Настройки
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
-# Настройка Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
+# Настройка Claude
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # Этапы онбординга
 ASK_NAME, ASK_AGE, ASK_SKIN_TYPE, ASK_SKIN_CONCERNS = range(4)
 
-# Список запрещённых и ограниченных ингредиентов (ЕС №1223/2009 и ТР ТС 009/2011)
+# Список запрещённых ингредиентов
 BANNED_INGREDIENTS = """
 ЗАПРЕЩЁННЫЕ И ОГРАНИЧЕННЫЕ ИНГРЕДИЕНТЫ (ЕС №1223/2009 и ТР ТС 009/2011):
 
-АВТОМАТИЧЕСКИ СНИЖАЮТ ОЦЕНКУ НА 25+ БАЛЛОВ:
+СНИЖАЮТ ОЦЕНКУ НА 25+ БАЛЛОВ:
 - Формальдегид и его доноры (DMDM Hydantoin, Imidazolidinyl Urea, Diazolidinyl Urea, Quaternium-15, Bronopol)
-- Парабены в высоких концентрациях (Propylparaben, Butylparaben, Isopropylparaben, Isobutylparaben)
+- Парабены (Propylparaben, Butylparaben, Isopropylparaben, Isobutylparaben)
 - Фталаты (Dibutyl Phthalate, Diethyl Phthalate)
 - Триклозан (Triclosan)
-- Гидрохинон (Hydroquinone) без рецепта
+- Гидрохинон (Hydroquinone)
 - Ртутьсодержащие соединения
 - Свинец и его соединения
 
 СНИЖАЮТ ОЦЕНКУ НА 10-20 БАЛЛОВ:
 - BHA (Butylated Hydroxyanisole) в высоких концентрациях
-- Этиловый спирт как основной ингредиент (первые 3 позиции)
+- Этиловый спирт в первых 3 позициях состава
 - SLS/SLES в средствах без смывания
 - Синтетические отдушки (Fragrance/Parfum) для чувствительной кожи
 - Минеральное масло как основа
 - Oxybenzone (эндокринный риск)
 - Octinoxate/Ethylhexyl Methoxycinnamate (эндокринный риск)
 
-ТРЕБУЮТ ВНИМАНИЯ (Low-Moderate risk):
+ТРЕБУЮТ ВНИМАНИЯ:
 - Methylisothiazolinone (MI) — частый аллерген
 - Methylchloroisothiazolinone (MCI) — частый аллерген
 - Propylene Glycol в высоких концентрациях
@@ -203,19 +202,23 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             skin_concerns=skin_concerns, product=product,
             banned_ingredients=BANNED_INGREDIENTS
         )
-        response = model.generate_content(prompt)
-        result = response.text
+
+        message = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        result = message.content[0].text
         if len(result) > 4000:
             result = result[:4000] + "...\n\n_(ответ сокращён)_"
+
         await loading_msg.delete()
-        await update.message.reply_text(result, parse_mode="Markdown")
+        await update.message.reply_text(result)
+
     except Exception as e:
         await loading_msg.delete()
-        error_msg = str(e)
-        if "quota" in error_msg.lower() or "429" in error_msg:
-            await update.message.reply_text("⏳ Превышен лимит запросов. Попробуй через минуту!")
-        else:
-            await update.message.reply_text("😔 Произошла ошибка при анализе. Попробуй ещё раз!")
+        await update.message.reply_text("😔 Произошла ошибка при анализе. Попробуй ещё раз!")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -239,7 +242,7 @@ def main():
     app.add_handler(CommandHandler("profile", profile))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze))
-    print("Бот Ингредиент запущен! 🚀")
+    print("Бот Ингредиент запущен на Claude! 🚀")
     app.run_polling()
 
 
